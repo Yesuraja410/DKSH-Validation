@@ -91,7 +91,6 @@ class StockResolver:
             
         if '+' in sku:
             parts = [clean_sku(p) for p in sku.split('+') if clean_sku(p)]
-            # Sum component reserved stocks or return max. Let's do sum.
             return sum(self.get_reserved_stock(p) for p in parts)
             
         match = re.search(r'^(.*)[xX](\d+)$', sku)
@@ -147,7 +146,6 @@ def evaluate_sku_logic(mp_status, tc_status, mp_stock, tc_stock, reserved_stock,
             else:
                 action = "Change to active"
         elif tc_stock_val == 1:
-            # Handle edge case where tc_stock is exactly 1 (not explicitly defined but logical)
             if max_0_val == 'Yes':
                 action = "Change to inactive"
             else:
@@ -166,7 +164,7 @@ def evaluate_sku_logic(mp_status, tc_status, mp_stock, tc_stock, reserved_stock,
                 elif buffer < 0:
                     action = "Impact/Force Stock Push"
                 else:
-                    action = "All Good" # if buffer is 0, they should match
+                    action = "All Good"
                     
     elif status_check and stock_check:
         action = "All Good"
@@ -175,12 +173,10 @@ def evaluate_sku_logic(mp_status, tc_status, mp_stock, tc_stock, reserved_stock,
 
 def validate_lazada(lazada_df, tc_inv_df, all_df):
     """
-    Validates Lazada SG data at the SKU level.
+    Validates Lazada SG/MY/TH data at the SKU level.
     """
-    # 1. Parse All File for TC stocks
     resolver = StockResolver(all_df)
     
-    # 2. Build TC Inventory Lookup
     tc_inv_lookup = {}
     if tc_inv_df is not None and not tc_inv_df.empty:
         for _, row in tc_inv_df.iterrows():
@@ -189,7 +185,6 @@ def validate_lazada(lazada_df, tc_inv_df, all_df):
                 tc_status = normalize_status(row.get('Item status'))
                 max_qty_val = row.get('Max Quantity')
                 
-                # Max 0 logic: If Max Quantity = 0 then max 0 is Yes, If blank/NaN then Max - No
                 if pd.isna(max_qty_val) or str(max_qty_val).strip() == '':
                     max_0 = 'No'
                 else:
@@ -208,12 +203,29 @@ def validate_lazada(lazada_df, tc_inv_df, all_df):
     for _, row in lazada_df.iterrows():
         sku = clean_sku(row.get('SellerSKU'))
         if not sku:
-            continue
+            # Try lowercase key fallback
+            sku = clean_sku(row.get('sellersku'))
+            if not sku:
+                # Try generic SKU fallback
+                sku = clean_sku(row.get('SKU'))
+                if not sku:
+                    continue
             
         mp_stock = row.get('Quantity', 0)
+        # Try generic stock fallback if Quantity doesn't exist
+        if 'Quantity' not in row and 'Quantity' not in lazada_df.columns:
+            for col in row.index:
+                if 'qty' in str(col).lower() or 'stock' in str(col).lower() or 'quantity' in str(col).lower():
+                    mp_stock = row[col]
+                    break
+
         mp_status = row.get('status', 'Inactive')
+        if 'status' not in row and 'status' not in lazada_df.columns:
+            for col in row.index:
+                if 'status' in str(col).lower() or 'item status' in str(col).lower():
+                    mp_status = row[col]
+                    break
         
-        # Lookups
         tc_info = tc_inv_lookup.get(sku, {'tc_status': 'Inactive', 'max_0': 'No'})
         tc_status = tc_info['tc_status']
         max_0 = tc_info['max_0']
@@ -250,21 +262,18 @@ def validate_lazada(lazada_df, tc_inv_df, all_df):
 
 def validate_shopee(shopee_stock_df, shopee_status_df, tc_inv_df, all_df):
     """
-    Validates Shopee SG data at both the Product ID (Consolidated) level and SKU level.
+    Validates Shopee SG/MY/TH data at both the Product ID (Consolidated) level and SKU level.
     """
     resolver = StockResolver(all_df)
     
-    # 1. Active Product IDs
     active_pids = set()
     if shopee_status_df is not None and not shopee_status_df.empty:
-        # Assuming status file contains Product IDs. Let's find columns with 'Product ID' or similar
         pid_col = None
         for col in shopee_status_df.columns:
             if 'product id' in str(col).lower() or 'pid' in str(col).lower():
                 pid_col = col
                 break
         if pid_col is None:
-            # Fallback to the first column
             pid_col = shopee_status_df.columns[0]
             
         for val in shopee_status_df[pid_col]:
@@ -272,7 +281,6 @@ def validate_shopee(shopee_stock_df, shopee_status_df, tc_inv_df, all_df):
             if cleaned:
                 active_pids.add(cleaned)
                 
-    # 2. Build TC Inventory Lookup
     tc_inv_lookup = {}
     if tc_inv_df is not None and not tc_inv_df.empty:
         for _, row in tc_inv_df.iterrows():
@@ -290,7 +298,6 @@ def validate_shopee(shopee_stock_df, shopee_status_df, tc_inv_df, all_df):
                         max_0 = 'No'
                 tc_inv_lookup[sku] = {'tc_status': tc_status, 'max_0': max_0}
                 
-    # Process SKU Details
     sku_details = []
     pid_to_skus = {}
     
@@ -346,7 +353,6 @@ def validate_shopee(shopee_stock_df, shopee_status_df, tc_inv_df, all_df):
             'tc_stock': tc_stock
         })
         
-    # Consolidate by Product ID
     pid_summary = []
     for pid, items in pid_to_skus.items():
         total_mp_stock = sum(item['mp_stock'] for item in items)
@@ -366,41 +372,94 @@ def validate_shopee(shopee_stock_df, shopee_status_df, tc_inv_df, all_df):
         
     return pd.DataFrame(pid_summary), pd.DataFrame(sku_details)
 
-def validate_tiktok(tiktok_stock_df, active_status_df, inactive_status_df, tc_inv_df, all_df):
+def validate_tiktok(tiktok_active_df, tiktok_inactive_df, tc_inv_df, all_df):
     """
-    Validates TikTok MY data at both the Product ID (Consolidated) level and SKU level.
+    Validates TikTok SG/MY/TH data at both the Product ID (Consolidated) level and SKU level.
+    Combines Active and Inactive stock files.
     """
     resolver = StockResolver(all_df)
     
-    # 1. Parse Status Files
-    active_skus = set()
-    if active_status_df is not None and not active_status_df.empty:
+    # 1. Gather all TikTok items from both active and inactive reports
+    tiktok_items = []
+    
+    if tiktok_active_df is not None and not tiktok_active_df.empty:
         sku_col = None
-        for col in active_status_df.columns:
+        for col in tiktok_active_df.columns:
             if 'seller sku' in str(col).lower() or 'sku' in str(col).lower():
                 sku_col = col
                 break
         if sku_col is None:
-            sku_col = active_status_df.columns[0]
-        for val in active_status_df[sku_col]:
-            cleaned = clean_sku(val)
-            if cleaned:
-                active_skus.add(cleaned)
+            sku_col = tiktok_active_df.columns[0]
+            
+        pid_col = None
+        for col in tiktok_active_df.columns:
+            if 'product id' in str(col).lower() or 'pid' in str(col).lower():
+                pid_col = col
+                break
+        if pid_col is None:
+            pid_col = tiktok_active_df.columns[1] if len(tiktok_active_df.columns) > 1 else tiktok_active_df.columns[0]
+            
+        qty_col = None
+        for col in tiktok_active_df.columns:
+            if 'quantity' in str(col).lower() or 'qty' in str(col).lower() or 'stock' in str(col).lower():
+                qty_col = col
+                break
+        if qty_col is None:
+            qty_col = tiktok_active_df.columns[2] if len(tiktok_active_df.columns) > 2 else tiktok_active_df.columns[0]
+
+        for _, row in tiktok_active_df.iterrows():
+            sku = clean_sku(row.get(sku_col))
+            pid = clean_pid(row.get(pid_col))
+            qty_val = pd.to_numeric(row.get(qty_col), errors='coerce')
+            qty = 0 if pd.isna(qty_val) else int(qty_val)
+            
+            if sku:
+                tiktok_items.append({
+                    'sku': sku,
+                    'pid': pid,
+                    'mp_stock': qty,
+                    'mp_status': 'Active'
+                })
                 
-    inactive_skus = set()
-    if inactive_status_df is not None and not inactive_status_df.empty:
+    if tiktok_inactive_df is not None and not tiktok_inactive_df.empty:
         sku_col = None
-        for col in inactive_status_df.columns:
+        for col in tiktok_inactive_df.columns:
             if 'seller sku' in str(col).lower() or 'sku' in str(col).lower():
                 sku_col = col
                 break
         if sku_col is None:
-            sku_col = inactive_status_df.columns[0]
-        for val in inactive_status_df[sku_col]:
-            cleaned = clean_sku(val)
-            if cleaned:
-                inactive_skus.add(cleaned)
-                
+            sku_col = tiktok_inactive_df.columns[0]
+            
+        pid_col = None
+        for col in tiktok_inactive_df.columns:
+            if 'product id' in str(col).lower() or 'pid' in str(col).lower():
+                pid_col = col
+                break
+        if pid_col is None:
+            pid_col = tiktok_inactive_df.columns[1] if len(tiktok_inactive_df.columns) > 1 else tiktok_inactive_df.columns[0]
+            
+        qty_col = None
+        for col in tiktok_inactive_df.columns:
+            if 'quantity' in str(col).lower() or 'qty' in str(col).lower() or 'stock' in str(col).lower():
+                qty_col = col
+                break
+        if qty_col is None:
+            qty_col = tiktok_inactive_df.columns[2] if len(tiktok_inactive_df.columns) > 2 else tiktok_inactive_df.columns[0]
+
+        for _, row in tiktok_inactive_df.iterrows():
+            sku = clean_sku(row.get(sku_col))
+            pid = clean_pid(row.get(pid_col))
+            qty_val = pd.to_numeric(row.get(qty_col), errors='coerce')
+            qty = 0 if pd.isna(qty_val) else int(qty_val)
+            
+            if sku:
+                tiktok_items.append({
+                    'sku': sku,
+                    'pid': pid,
+                    'mp_stock': qty,
+                    'mp_status': 'Inactive'
+                })
+
     # 2. Build TC Inventory Lookup
     tc_inv_lookup = {}
     if tc_inv_df is not None and not tc_inv_df.empty:
@@ -422,23 +481,13 @@ def validate_tiktok(tiktok_stock_df, active_status_df, inactive_status_df, tc_in
     sku_details = []
     pid_to_skus = {}
     
-    for _, row in tiktok_stock_df.iterrows():
-        sku = clean_sku(row.get('Seller SKU'))
-        pid = clean_pid(row.get('Product ID'))
-        if not sku or not pid:
-            continue
-            
-        mp_stock = pd.to_numeric(row.get('Quantity'), errors='coerce')
-        mp_stock = 0 if pd.isna(mp_stock) else int(mp_stock)
+    # Process combined items
+    for item in tiktok_items:
+        sku = item['sku']
+        pid = item['pid']
+        mp_stock = item['mp_stock']
+        mp_status = item['mp_status']
         
-        # TikTok Status resolution: Active file, Inactive file, default to Inactive
-        if sku in active_skus:
-            mp_status = "Active"
-        elif sku in inactive_skus:
-            mp_status = "Inactive"
-        else:
-            mp_status = "Inactive"
-            
         tc_info = tc_inv_lookup.get(sku, {'tc_status': 'Inactive', 'max_0': 'No'})
         tc_status = tc_info['tc_status']
         max_0 = tc_info['max_0']
@@ -477,7 +526,8 @@ def validate_tiktok(tiktok_stock_df, active_status_df, inactive_status_df, tc_in
         pid_to_skus[pid].append({
             'sku': sku,
             'mp_stock': mp_stock,
-            'tc_stock': tc_stock
+            'tc_stock': tc_stock,
+            'mp_status': mp_status
         })
         
     # Consolidate by Product ID
@@ -487,8 +537,7 @@ def validate_tiktok(tiktok_stock_df, active_status_df, inactive_status_df, tc_in
         total_tc_stock = sum(item['tc_stock'] for item in items)
         skus_str = ", ".join(item['sku'] for item in items)
         
-        # Product ID status is Active if any SKU under it is Active
-        has_active_sku = any(item['sku'] in active_skus for item in items)
+        has_active_sku = any(item['mp_status'] == 'Active' for item in items)
         status = "Active" if has_active_sku else "Inactive"
         
         match = (total_mp_stock == total_tc_stock)
