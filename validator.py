@@ -460,6 +460,18 @@ def validate_tiktok(tiktok_active_df, tiktok_inactive_df, tc_inv_df, all_df):
                     'mp_status': 'Inactive'
                 })
 
+    # Deduplicate tiktok_items by SKU, prioritizing Active status
+    sku_to_item = {}
+    for item in tiktok_items:
+        s = item['sku']
+        if s not in sku_to_item:
+            sku_to_item[s] = item
+        else:
+            # If duplicate exists, prioritize "Active"
+            if sku_to_item[s]['mp_status'] == 'Inactive' and item['mp_status'] == 'Active':
+                sku_to_item[s] = item
+    tiktok_items = list(sku_to_item.values())
+
     # 2. Build TC Inventory Lookup
     tc_inv_lookup = {}
     if tc_inv_df is not None and not tc_inv_df.empty:
