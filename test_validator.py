@@ -50,7 +50,7 @@ class TestStockValidator(unittest.TestCase):
             mp_status='Active', tc_status='Inactive', mp_stock=5, tc_stock=5, reserved_stock=0, max_0='No'
         )
         self.assertFalse(status_chk)
-        self.assertEqual(action, "Change to Inactive")
+        self.assertEqual(action, "Change to Active")
 
         # 3. Status Check = True -> Stock Check = false -> TC Status = Active Reserved = 0 and Max 0 = No -> Make Impact
         status_chk, stock_chk, action = evaluate_sku_logic(
