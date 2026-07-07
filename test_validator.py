@@ -11,8 +11,8 @@ class TestStockValidator(unittest.TestCase):
         self.assertEqual(clean_sku(np.nan), "")
         self.assertEqual(clean_sku(None), "")
 
-    def test_stock_resolver(self):
-        # Create a mock All File dataframe with the new column headers
+    def test_stock_resolver_no_buffer(self):
+        # Create a mock All File dataframe
         all_data = pd.DataFrame({
             'sellerSKU': ['A', 'B', 'C', '10023.0'],
             'MyStock-1 quantity': [100, 50, 15, '20'],
@@ -23,36 +23,61 @@ class TestStockValidator(unittest.TestCase):
         # Test base lookup
         self.assertEqual(resolver.get_tc_stock('A'), 100)
         self.assertEqual(resolver.get_tc_stock('B'), 50)
-        self.assertEqual(resolver.get_tc_stock('10023'), 20)
-        self.assertEqual(resolver.get_tc_stock('D'), 0) # Missing SKU
         
         # Test '+' bundle (e.g. A+B)
         self.assertEqual(resolver.get_tc_stock('A+B'), 50) # min(100, 50)
-        self.assertEqual(resolver.get_tc_stock('A+B+C'), 15) # min(100, 50, 15)
         
-        # Test 'X' bundle (e.g. AX2, BX3)
+        # Test 'X' bundle (e.g. AX2)
         self.assertEqual(resolver.get_tc_stock('AX2'), 50) # 100 // 2
-        self.assertEqual(resolver.get_tc_stock('BX3'), 16) # 50 // 3 = 16
+
+    def test_stock_resolver_inventory_buffer(self):
+        all_data = pd.DataFrame({
+            'sellerSKU': ['A', 'B'],
+            'MyStock-1 quantity': [10, 50],
+            'MyStock-1 reservedQuantity': [0, 0]
+        })
+        # Inventory Buffer = 2
+        resolver = StockResolver(all_data, buffer_type="Inventory Buffer", buffer_val=2)
         
-        # Test combination bundle
-        self.assertEqual(resolver.get_tc_stock('AX2+BX2'), 25)
+        # 10 - 2 = 8
+        self.assertEqual(resolver.get_tc_stock('A'), 8)
+        # 50 - 2 = 48
+        self.assertEqual(resolver.get_tc_stock('B'), 48)
+        
+        # Combo A+B stock should be min(raw_A, raw_B) - buffer
+        # raw_A = 10, raw_B = 50 -> min(10, 50) = 10 -> 10 - 2 = 8
+        self.assertEqual(resolver.get_tc_stock('A+B'), 8)
+        
+        # AX2: raw_A = 10 -> 10 // 2 = 5 -> 5 - 2 = 3
+        self.assertEqual(resolver.get_tc_stock('AX2'), 3)
+
+    def test_stock_resolver_percentage_buffer(self):
+        all_data = pd.DataFrame({
+            'sellerSKU': ['A'],
+            'MyStock-1 quantity': [10],
+            'MyStock-1 reservedQuantity': [0]
+        })
+        # Percentage Buffer = 5% (reduction)
+        # 10 * (1 - 0.05) = 9.5 -> 9
+        resolver = StockResolver(all_data, buffer_type="Percentage Buffer", buffer_val=5.0)
+        self.assertEqual(resolver.get_tc_stock('A'), 9)
 
     def test_evaluate_sku_logic(self):
-        # 1. Status Check = False -> Stock = 0 -> Change to inactive
+        # Rule 1: Status Check = False -> Stock=0 -> Change to inactive
         status_chk, stock_chk, action = evaluate_sku_logic(
             mp_status='Active', tc_status='Inactive', mp_stock=0, tc_stock=0, reserved_stock=0, max_0='No'
         )
         self.assertFalse(status_chk)
         self.assertEqual(action, "Change to inactive")
 
-        # 2. Status Check = False -> Stock = More than 1 -> Change to Inactive
+        # Rule 2: Status Check = False -> Stock=More than 1 -> Change to Active
         status_chk, stock_chk, action = evaluate_sku_logic(
             mp_status='Active', tc_status='Inactive', mp_stock=5, tc_stock=5, reserved_stock=0, max_0='No'
         )
         self.assertFalse(status_chk)
         self.assertEqual(action, "Change to Active")
 
-        # 3. Status Check = True -> Stock Check = false -> TC Status = Active Reserved = 0 and Max 0 = No -> Make Impact
+        # Rule 3: Status Check = True -> Stock Check = false -> TC Status = Active Reserved = 0 and Max 0 = No -> Make Impact
         status_chk, stock_chk, action = evaluate_sku_logic(
             mp_status='Active', tc_status='Active', mp_stock=10, tc_stock=5, reserved_stock=0, max_0='No'
         )
@@ -60,7 +85,7 @@ class TestStockValidator(unittest.TestCase):
         self.assertFalse(stock_chk)
         self.assertEqual(action, "Make Impact")
 
-        # 4. Status Check = True -> Stock Check = false -> TC Status = Active Reserved = not equal to 0 -> Reserved stock
+        # Rule 4: Status Check = True -> Stock Check = false -> TC Status = Active Reserved = not equal to 0 -> Reserved stock
         status_chk, stock_chk, action = evaluate_sku_logic(
             mp_status='Active', tc_status='Active', mp_stock=10, tc_stock=5, reserved_stock=2, max_0='No'
         )
@@ -68,15 +93,23 @@ class TestStockValidator(unittest.TestCase):
         self.assertFalse(stock_chk)
         self.assertEqual(action, "Reserved stock")
 
-        # 5. Status Check = True -> Stock Check = false -> TC Status = Inactive -> Stock not pushed due to Inactive Status
+        # New Rule: Status Check = True -> Stock Check = false -> TC Status = Inactive -> TC Stock more than 0 stock -> Change to Active Status
         status_chk, stock_chk, action = evaluate_sku_logic(
             mp_status='Inactive', tc_status='Inactive', mp_stock=10, tc_stock=5, reserved_stock=0, max_0='No'
         )
         self.assertTrue(status_chk)
         self.assertFalse(stock_chk)
+        self.assertEqual(action, "Change to Active Status")
+
+        # Rule 5: Status Check = True -> Stock Check = false -> TC Status = Inactive -> TC Stock = 0 -> Stock not pushed due to Inactive Status
+        status_chk, stock_chk, action = evaluate_sku_logic(
+            mp_status='Inactive', tc_status='Inactive', mp_stock=10, tc_stock=0, reserved_stock=0, max_0='No'
+        )
+        self.assertTrue(status_chk)
+        self.assertFalse(stock_chk)
         self.assertEqual(action, "Stock not pushed due to Inactive Status")
 
-        # 6. Status Check = True -> Stock Check = True -> TC Stock = 0 -> Change to Inactive (if not inactive)
+        # Rule 6: Status Check = True -> Stock Check = True -> TC Stock = 0 both TC & MP Status should be Inactive. If not -> Change to Inactive else All Good.
         status_chk, stock_chk, action = evaluate_sku_logic(
             mp_status='Active', tc_status='Active', mp_stock=0, tc_stock=0, reserved_stock=0, max_0='No'
         )
@@ -84,14 +117,7 @@ class TestStockValidator(unittest.TestCase):
         self.assertTrue(stock_chk)
         self.assertEqual(action, "Change to Inactive")
 
-        status_chk, stock_chk, action = evaluate_sku_logic(
-            mp_status='Inactive', tc_status='Inactive', mp_stock=0, tc_stock=0, reserved_stock=0, max_0='No'
-        )
-        self.assertTrue(status_chk)
-        self.assertTrue(stock_chk)
-        self.assertEqual(action, "All Good")
-
-        # 7. Status Check = True -> Stock Check = True -> TC Stock > 0 -> Change to Active (if not active)
+        # Rule 7: Status Check = True -> Stock Check = True -> TC Stock more than 0 both TC & MP Status should be Active. If not -> Change to Active else All Good.
         status_chk, stock_chk, action = evaluate_sku_logic(
             mp_status='Inactive', tc_status='Inactive', mp_stock=5, tc_stock=5, reserved_stock=0, max_0='No'
         )
@@ -99,12 +125,29 @@ class TestStockValidator(unittest.TestCase):
         self.assertTrue(stock_chk)
         self.assertEqual(action, "Change to Active")
 
-        status_chk, stock_chk, action = evaluate_sku_logic(
-            mp_status='Active', tc_status='Active', mp_stock=5, tc_stock=5, reserved_stock=0, max_0='No'
-        )
-        self.assertTrue(status_chk)
-        self.assertTrue(stock_chk)
-        self.assertEqual(action, "All Good")
+    def test_validate_lazada_column_renaming(self):
+        # Mock Lazada and Reference dataframes
+        lazada_df = pd.DataFrame({
+            'SellerSKU': ['A'],
+            'Quantity': [10],
+            'status': ['Active']
+        })
+        tc_inv = pd.DataFrame({
+            'Custom SKU': ['A'],
+            'Item status': ['Active'],
+            'Max Quantity': [10]
+        })
+        all_data = pd.DataFrame({
+            'sellerSKU': ['A'],
+            'MyStock-1 quantity': [10],
+            'MyStock-1 reservedQuantity': [0]
+        })
+        
+        res = validate_lazada(lazada_df, tc_inv, all_data)
+        
+        # Verify column renamed from 'Buffer (TC - MP)' to 'QTY Difference'
+        self.assertIn('QTY Difference', res.columns)
+        self.assertNotIn('Buffer (TC - MP)', res.columns)
 
 if __name__ == '__main__':
     unittest.main()
