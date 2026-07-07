@@ -188,7 +188,7 @@ def evaluate_sku_logic(mp_status, tc_status, mp_stock, tc_stock, reserved_stock,
         if tc_stock_val == 0:
             action = "Change to inactive"
         else:
-            action = "Change to Inactive"
+            action = "Change to Active"
             
     elif not stock_check:
         if norm_tc_status == "Active":
