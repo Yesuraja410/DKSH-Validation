@@ -173,6 +173,15 @@ with st.sidebar.expander("Reference Files"):
     tc_inv_raw = st.file_uploader("Upload TC Inventory *(Mandatory)*", type=['xlsx', 'xls', 'csv'], key="upload_tc_inv")
     all_file_raw = st.file_uploader("Upload TC All File *(Mandatory)*", type=['xlsx', 'xls', 'csv'], key="upload_all_file")
 
+# Channel Buffer Section
+st.sidebar.header("CHANNEL BUFFER")
+buffer_type = st.sidebar.selectbox("Buffer Type", ["None", "Inventory Buffer", "Percentage Buffer"], key="buffer_type")
+buffer_val = 0
+if buffer_type == "Inventory Buffer":
+    buffer_val = st.sidebar.number_input("Reduce Quantity (Qty)", min_value=0, value=0, step=1, key="buffer_val_inv")
+elif buffer_type == "Percentage Buffer":
+    buffer_val = st.sidebar.number_input("Reduce Percentage (%)", min_value=0.0, max_value=100.0, value=0.0, step=0.5, key="buffer_val_pct")
+
 st.sidebar.markdown("---")
 run_validation = st.sidebar.button("Run Validation", type="primary", use_container_width=True)
 
@@ -223,13 +232,13 @@ if run_validation:
                 # Lazada
                 if lazada_raw:
                     lazada_df = parse_file(lazada_raw, skip_lazada_rows=True)
-                    st.session_state.lazada_results = validate_lazada(lazada_df, tc_inv_df, all_df)
+                    st.session_state.lazada_results = validate_lazada(lazada_df, tc_inv_df, all_df, buffer_type, buffer_val)
                     
                 # Shopee
                 if shopee_stock_raw:
                     shopee_stock_df = parse_file(shopee_stock_raw)
                     shopee_status_df = parse_file(shopee_status_raw) if shopee_status_raw else None
-                    shopee_pid, shopee_sku = validate_shopee(shopee_stock_df, shopee_status_df, tc_inv_df, all_df)
+                    shopee_pid, shopee_sku = validate_shopee(shopee_stock_df, shopee_status_df, tc_inv_df, all_df, buffer_type, buffer_val)
                     st.session_state.shopee_pid_results = shopee_pid
                     st.session_state.shopee_sku_results = shopee_sku
                     
@@ -237,7 +246,7 @@ if run_validation:
                 if tiktok_active_raw or tiktok_inactive_raw:
                     tiktok_active_df = parse_file(tiktok_active_raw) if tiktok_active_raw else None
                     tiktok_inactive_df = parse_file(tiktok_inactive_raw) if tiktok_inactive_raw else None
-                    tiktok_pid, tiktok_sku = validate_tiktok(tiktok_active_df, tiktok_inactive_df, tc_inv_df, all_df)
+                    tiktok_pid, tiktok_sku = validate_tiktok(tiktok_active_df, tiktok_inactive_df, tc_inv_df, all_df, buffer_type, buffer_val)
                     st.session_state.tiktok_pid_results = tiktok_pid
                     st.session_state.tiktok_sku_results = tiktok_sku
                 
