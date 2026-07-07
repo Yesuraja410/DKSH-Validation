@@ -194,6 +194,9 @@ st.markdown(f"""
 """, unsafe_allow_html=True)
 
 def generate_excel_report(lazada_res, shopee_pid, shopee_sku, tiktok_pid, tiktok_sku):
+    from openpyxl.styles import Border, Side, Alignment
+    from openpyxl.utils import get_column_letter
+
     buffer = io.BytesIO()
     with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
         if lazada_res is not None and not lazada_res.empty:
@@ -206,6 +209,36 @@ def generate_excel_report(lazada_res, shopee_pid, shopee_sku, tiktok_pid, tiktok
             tiktok_pid.to_excel(writer, sheet_name="TikTok PID Level", index=False)
         if tiktok_sku is not None and not tiktok_sku.empty:
             tiktok_sku.to_excel(writer, sheet_name="TikTok SKU Level", index=False)
+            
+        # Access worksheets in openpyxl workbook
+        workbook = writer.book
+        
+        # Border style
+        thin_side = Side(border_style="thin", color="000000")
+        thin_border = Border(top=thin_side, left=thin_side, right=thin_side, bottom=thin_side)
+        
+        # Alignment style
+        center_align = Alignment(horizontal="center", vertical="center")
+        
+        for name in workbook.sheetnames:
+            ws = workbook[name]
+            
+            # Apply formatting to all cells
+            for row in ws.iter_rows(min_row=1, max_row=ws.max_row, min_col=1, max_col=ws.max_column):
+                for cell in row:
+                    cell.border = thin_border
+                    cell.alignment = center_align
+            
+            # Auto-fit column widths
+            for col in ws.columns:
+                max_len = 0
+                col_letter = get_column_letter(col[0].column)
+                for cell in col:
+                    val = str(cell.value or '')
+                    if len(val) > max_len:
+                        max_len = len(val)
+                ws.column_dimensions[col_letter].width = max(max_len + 4, 12)
+                
     return buffer.getvalue()
 
 # Run validation process
