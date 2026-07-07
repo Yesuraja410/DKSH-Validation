@@ -45,11 +45,60 @@ class StockResolver:
         self.reserved_map = {}
         
         if all_df is not None and not all_df.empty:
+            actual_cols = list(all_df.columns)
+            
+            sku_col = None
+            for c in ["sellerSKU", "SellerSKU", "SKU", "Seller SKU", "sellersku"]:
+                if c in actual_cols:
+                    sku_col = c
+                    break
+            if not sku_col:
+                for c in actual_cols:
+                    if "sku" in c.lower():
+                        sku_col = c
+                        break
+                        
+            stock_col = None
+            for c in actual_cols:
+                if c.strip().lower() == "mystock-1 quantity":
+                    stock_col = c
+                    break
+            if not stock_col:
+                for c in ["TC Stock", "TCStock", "Stock", "Quantity", "TC_Stock"]:
+                    if c in actual_cols:
+                        stock_col = c
+                        break
+            if not stock_col:
+                for c in actual_cols:
+                    if "quantity" in c.lower() or "stock" in c.lower():
+                        stock_col = c
+                        break
+                        
+            reserved_col = None
+            for c in actual_cols:
+                if c.strip().lower() == "mystock-1 reservedquantity":
+                    reserved_col = c
+                    break
+            if not reserved_col:
+                for c in ["Reserved Stock", "ReservedStock", "Reserved", "TC Reserved", "TC_Reserved"]:
+                    if c in actual_cols:
+                        reserved_col = c
+                        break
+            if not reserved_col:
+                for c in actual_cols:
+                    if "reserved" in c.lower():
+                        reserved_col = c
+                        break
+
+            sku_key = sku_col if sku_col else 'sellerSKU'
+            stock_key = stock_col if stock_col else 'TC Stock'
+            reserved_key = reserved_col if reserved_col else 'Reserved Stock'
+
             for _, row in all_df.iterrows():
-                sku = clean_sku(row.get('sellerSKU'))
+                sku = clean_sku(row.get(sku_key))
                 if sku:
-                    tc_stock = pd.to_numeric(row.get('TC Stock'), errors='coerce')
-                    reserved = pd.to_numeric(row.get('Reserved Stock'), errors='coerce')
+                    tc_stock = pd.to_numeric(row.get(stock_key), errors='coerce')
+                    reserved = pd.to_numeric(row.get(reserved_key), errors='coerce')
                     self.stock_map[sku] = 0 if pd.isna(tc_stock) else int(tc_stock)
                     self.reserved_map[sku] = 0 if pd.isna(reserved) else int(reserved)
 
@@ -135,39 +184,34 @@ def evaluate_sku_logic(mp_status, tc_status, mp_stock, tc_stock, reserved_stock,
     status_check = (norm_mp_status == norm_tc_status)
     stock_check = (mp_stock_val == tc_stock_val)
     
-    action = "Manual review required"
-    
-    if not status_check and stock_check:
+    if not status_check:
         if tc_stock_val == 0:
             action = "Change to inactive"
-        elif tc_stock_val > 1:
-            if max_0_val == 'Yes':
-                action = "Change to inactive"
-            else:
-                action = "Change to active"
-        elif tc_stock_val == 1:
-            if max_0_val == 'Yes':
-                action = "Change to inactive"
-            else:
-                action = "Change to active"
-                
-    elif status_check and not stock_check:
-        if max_0_val == 'Yes':
-            action = "Max Already Done"
         else:
-            if res_stock_val > 0:
-                action = "Reserved Done"
+            action = "Change to Inactive"
+            
+    elif not stock_check:
+        if norm_tc_status == "Active":
+            if res_stock_val == 0 and max_0_val == "No":
+                action = "Make Impact"
+            elif res_stock_val != 0:
+                action = "Reserved stock"
             else:
-                buffer = tc_stock_val - mp_stock_val
-                if buffer > 0:
-                    action = "Buffer Done"
-                elif buffer < 0:
-                    action = "Impact/Force Stock Push"
-                else:
-                    action = "All Good"
-                    
-    elif status_check and stock_check:
-        action = "All Good"
+                action = "Make Impact"
+        else:
+            action = "Stock not pushed due to Inactive Status"
+            
+    else:
+        if tc_stock_val == 0:
+            if norm_tc_status == "Inactive" and norm_mp_status == "Inactive":
+                action = "All Good"
+            else:
+                action = "Change to Inactive"
+        else:
+            if norm_tc_status == "Active" and norm_mp_status == "Active":
+                action = "All Good"
+            else:
+                action = "Change to Active"
         
     return status_check, stock_check, action
 
