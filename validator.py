@@ -40,9 +40,11 @@ class StockResolver:
     Resolves TC Stock and Reserved Stock for single and bundle SKUs based on the All File.
     Handles '+' bundles and 'X' bundles (e.g. AX2, AX3) recursively.
     """
-    def __init__(self, all_df):
+    def __init__(self, all_df, buffer_type=None, buffer_val=0):
         self.stock_map = {}
         self.reserved_map = {}
+        self.buffer_type = buffer_type
+        self.buffer_val = buffer_val
         
         if all_df is not None and not all_df.empty:
             actual_cols = list(all_df.columns)
@@ -102,7 +104,7 @@ class StockResolver:
                     self.stock_map[sku] = 0 if pd.isna(tc_stock) else int(tc_stock)
                     self.reserved_map[sku] = 0 if pd.isna(reserved) else int(reserved)
 
-    def get_tc_stock(self, sku):
+    def _get_raw_tc_stock(self, sku):
         sku = clean_sku(sku)
         if not sku:
             return 0
@@ -112,22 +114,30 @@ class StockResolver:
             parts = [clean_sku(p) for p in sku.split('+') if clean_sku(p)]
             if not parts:
                 return 0
-            # Get TC Stock for each individual SKU in the bundle
-            stocks = [self.get_tc_stock(p) for p in parts]
-            # Use the lowest stock among them
+            stocks = [self._get_raw_tc_stock(p) for p in parts]
             return min(stocks) if stocks else 0
         
-        # Check if it is a "X" bundle (e.g., AX2, AX3)
-        # Regex matching X followed by digits at the end of the string
+        # Check if it is a "X" bundle (e.g., AX2, BX3)
         match = re.search(r'^(.*)[xX](\d+)$', sku)
         if match:
             base_sku = clean_sku(match.group(1))
             multiplier = int(match.group(2))
             if multiplier > 0:
-                base_stock = self.get_tc_stock(base_sku)
+                base_stock = self._get_raw_tc_stock(base_sku)
                 return base_stock // multiplier
             
         return self.stock_map.get(sku, 0)
+
+    def get_tc_stock(self, sku):
+        stock = self._get_raw_tc_stock(sku)
+        
+        if self.buffer_type == "Inventory Buffer" and self.buffer_val > 0:
+            stock = max(stock - int(self.buffer_val), 0)
+        elif self.buffer_type == "Percentage Buffer" and self.buffer_val > 0:
+            stock_float = stock * (1.0 - float(self.buffer_val) / 100.0)
+            stock = max(int(stock_float), 0)
+            
+        return stock
 
     def get_reserved_stock(self, sku):
         sku = clean_sku(sku)
@@ -198,8 +208,11 @@ def evaluate_sku_logic(mp_status, tc_status, mp_stock, tc_stock, reserved_stock,
                 action = "Reserved stock"
             else:
                 action = "Make Impact"
-        else:
-            action = "Stock not pushed due to Inactive Status"
+        else: # norm_tc_status == "Inactive"
+            if tc_stock_val > 0:
+                action = "Change to Active Status"
+            else:
+                action = "Stock not pushed due to Inactive Status"
             
     else:
         if tc_stock_val == 0:
@@ -215,11 +228,11 @@ def evaluate_sku_logic(mp_status, tc_status, mp_stock, tc_stock, reserved_stock,
         
     return status_check, stock_check, action
 
-def validate_lazada(lazada_df, tc_inv_df, all_df):
+def validate_lazada(lazada_df, tc_inv_df, all_df, buffer_type=None, buffer_val=0):
     """
     Validates Lazada SG/MY/TH data at the SKU level.
     """
-    resolver = StockResolver(all_df)
+    resolver = StockResolver(all_df, buffer_type, buffer_val)
     
     tc_inv_lookup = {}
     if tc_inv_df is not None and not tc_inv_df.empty:
@@ -298,17 +311,17 @@ def validate_lazada(lazada_df, tc_inv_df, all_df):
             'Reserved Stock': reserved_stock,
             'Max 0': max_0,
             'Stock Check': stock_chk,
-            'Buffer (TC - MP)': buffer,
+            'QTY Difference': buffer,
             'Action Required': action
         })
         
     return pd.DataFrame(results)
 
-def validate_shopee(shopee_stock_df, shopee_status_df, tc_inv_df, all_df):
+def validate_shopee(shopee_stock_df, shopee_status_df, tc_inv_df, all_df, buffer_type=None, buffer_val=0):
     """
     Validates Shopee SG/MY/TH data at both the Product ID (Consolidated) level and SKU level.
     """
-    resolver = StockResolver(all_df)
+    resolver = StockResolver(all_df, buffer_type, buffer_val)
     
     active_pids = set()
     if shopee_status_df is not None and not shopee_status_df.empty:
@@ -385,7 +398,7 @@ def validate_shopee(shopee_stock_df, shopee_status_df, tc_inv_df, all_df):
             'Reserved Stock': reserved_stock,
             'Max 0': max_0,
             'Stock Check': stock_chk,
-            'Buffer (TC - MP)': buffer,
+            'QTY Difference': buffer,
             'Action Required': action
         })
         
@@ -416,12 +429,12 @@ def validate_shopee(shopee_stock_df, shopee_status_df, tc_inv_df, all_df):
         
     return pd.DataFrame(pid_summary), pd.DataFrame(sku_details)
 
-def validate_tiktok(tiktok_active_df, tiktok_inactive_df, tc_inv_df, all_df):
+def validate_tiktok(tiktok_active_df, tiktok_inactive_df, tc_inv_df, all_df, buffer_type=None, buffer_val=0):
     """
     Validates TikTok SG/MY/TH data at both the Product ID (Consolidated) level and SKU level.
     Combines Active and Inactive stock files.
     """
-    resolver = StockResolver(all_df)
+    resolver = StockResolver(all_df, buffer_type, buffer_val)
     
     # 1. Gather all TikTok items from both active and inactive reports
     tiktok_items = []
@@ -573,7 +586,7 @@ def validate_tiktok(tiktok_active_df, tiktok_inactive_df, tc_inv_df, all_df):
             'Reserved Stock': reserved_stock,
             'Max 0': max_0,
             'Stock Check': stock_chk,
-            'Buffer (TC - MP)': buffer,
+            'QTY Difference': buffer,
             'Action Required': action
         })
         
