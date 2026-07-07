@@ -194,7 +194,7 @@ st.markdown(f"""
 """, unsafe_allow_html=True)
 
 def generate_excel_report(lazada_res, shopee_pid, shopee_sku, tiktok_pid, tiktok_sku):
-    from openpyxl.styles import Border, Side, Alignment
+    from openpyxl.styles import Border, Side, Alignment, PatternFill, Font
     from openpyxl.utils import get_column_letter
 
     buffer = io.BytesIO()
@@ -220,14 +220,26 @@ def generate_excel_report(lazada_res, shopee_pid, shopee_sku, tiktok_pid, tiktok
         # Alignment style
         center_align = Alignment(horizontal="center", vertical="center")
         
+        # Header styles (Bold and Light Blue highlight background)
+        header_font = Font(bold=True)
+        header_fill = PatternFill(start_color="DDEBF7", end_color="DDEBF7", fill_type="solid")
+        
         for name in workbook.sheetnames:
             ws = workbook[name]
+            
+            # Freeze the first row
+            ws.freeze_panes = "A2"
             
             # Apply formatting to all cells
             for row in ws.iter_rows(min_row=1, max_row=ws.max_row, min_col=1, max_col=ws.max_column):
                 for cell in row:
                     cell.border = thin_border
                     cell.alignment = center_align
+            
+            # Bold and highlight header cells
+            for cell in ws[1]:
+                cell.font = header_font
+                cell.fill = header_fill
             
             # Auto-fit column widths
             for col in ws.columns:
