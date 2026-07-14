@@ -234,6 +234,20 @@ def validate_lazada(lazada_df, tc_inv_df, all_df, buffer_type=None, buffer_val=0
     """
     resolver = StockResolver(all_df, buffer_type, buffer_val)
     
+    qty_headers = [
+        "DKSH SINGAPORE PTE LTD (HEC)", "DKSH SINGAPORE", "No Brand",
+        "DKSH SINGAPORE HEALTHCARE", "dropshipping", "DKSH",
+        "DKSH CONSUMER GOODS WAREHOUSE", "DKSH CONSUMER GOODS RETURN WAREHOUSE",
+        "ne1h8SSm", "Sofy Silcot UCM", "Lifree Certainty UCM",
+        "seller-iku-lamy-sggraas.ai17210300565", "Audisol Official Store",
+        "Warehouse", "GkAkNaw0", "Quantity", "DKSH Malaysia Sdn. Bhd.",
+        "Glutanex Malaysia Official Store", "BD Diabetes Care",
+        "seller-ill-trichoderm-mygraas.ai1704178070813", "SMITH & NEPHEW",
+        "DKSH Bangna KM.20", "บริษัทดีเคเอสเอช(ประเทศไทย)จำกัด", "DKSH Bangna",
+        "dropping"
+    ]
+    qty_headers_set = {h.strip().lower() for h in qty_headers}
+    
     tc_inv_lookup = {}
     if tc_inv_df is not None and not tc_inv_df.empty:
         for _, row in tc_inv_df.iterrows():
@@ -268,9 +282,14 @@ def validate_lazada(lazada_df, tc_inv_df, all_df, buffer_type=None, buffer_val=0
                 if not sku:
                     continue
             
-        mp_stock = row.get('Quantity', 0)
-        # Try generic stock fallback if Quantity doesn't exist
-        if 'Quantity' not in row and 'Quantity' not in lazada_df.columns:
+        mp_stock = 0
+        found_qty = False
+        for col in row.index:
+            if str(col).strip().lower() in qty_headers_set:
+                mp_stock = row[col]
+                found_qty = True
+                break
+        if not found_qty:
             for col in row.index:
                 if 'qty' in str(col).lower() or 'stock' in str(col).lower() or 'quantity' in str(col).lower():
                     mp_stock = row[col]
