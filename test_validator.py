@@ -149,5 +149,34 @@ class TestStockValidator(unittest.TestCase):
         self.assertIn('QTY Difference', res.columns)
         self.assertNotIn('Buffer (TC - MP)', res.columns)
 
+    def test_validate_lazada_multiple_headers(self):
+        # Mock Lazada dataframes with different headers from the list
+        lazada_df_1 = pd.DataFrame({
+            'SellerSKU': ['A'],
+            'DKSH SINGAPORE': [15],
+            'status': ['Active']
+        })
+        lazada_df_2 = pd.DataFrame({
+            'SellerSKU': ['A'],
+            'SMITH & NEPHEW': [22],
+            'status': ['Active']
+        })
+        tc_inv = pd.DataFrame({
+            'Custom SKU': ['A'],
+            'Item status': ['Active'],
+            'Max Quantity': [10]
+        })
+        all_data = pd.DataFrame({
+            'sellerSKU': ['A'],
+            'MyStock-1 quantity': [10],
+            'MyStock-1 reservedQuantity': [0]
+        })
+        
+        res_1 = validate_lazada(lazada_df_1, tc_inv, all_data)
+        res_2 = validate_lazada(lazada_df_2, tc_inv, all_data)
+        
+        self.assertEqual(res_1.iloc[0]['MP Stock (Lazada)'], 15)
+        self.assertEqual(res_2.iloc[0]['MP Stock (Lazada)'], 22)
+
 if __name__ == '__main__':
     unittest.main()
